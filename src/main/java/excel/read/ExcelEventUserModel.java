@@ -1,3 +1,5 @@
+package excel.read;
+
 import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
@@ -18,30 +20,56 @@ import org.xml.sax.helpers.DefaultHandler;
  * http://poi.apache.org/components/spreadsheet/how-to.html#xssf_sax_api
  */
 public class ExcelEventUserModel {
-    public Map<Integer, Map<Integer, String>> data;
+    private Map<Integer, Map<Integer, String>> data;
     private String rId;
+    private boolean rIdInitialized;
 
     public ExcelEventUserModel() {
-        this.data = new HashMap<>();
+        // 默认置为rId1
         this.rId = "rId1";
+    }
+
+    public Map<Integer, Map<Integer, String>> processOneSheet(String filePath) {
+        this.data = new HashMap<>();
+        OPCPackage pkg = null;
+        SharedStringsTable sst = null;
+        InputStream sheet = null;
+        try {
+            pkg = OPCPackage.open(filePath);
+            XSSFReader r = new XSSFReader(pkg);
+            // 通过读取workbook设置rid
+            setRelationshipId(r);
+            sst = r.getSharedStringsTable();
+            XMLReader parser = fetchSheetParser(sst);
+            sheet = r.getSheet(rId);
+            InputSource sheetSource = new InputSource(sheet);
+            parser.parse(sheetSource);
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            releaseResources(sheet, sst, pkg, null, null);
+        }
+        return this.data;
     }
 
     /**
      * 读取第一个sheet的数据
      *
-     * @param filePath 文件路径
+     * @param file Excel文件
      * @return 表格数据
      */
-    public Map<Integer, Map<Integer, String>> processOneSheet(String filePath) {
+    public Map<Integer, Map<Integer, String>> processOneSheet(File file) {
 
         this.data = new HashMap<>();
 
+        FileInputStream fileInputStream = null;
         InputStream in = null;
         OPCPackage pkg = null;
         SharedStringsTable sst = null;
         InputStream sheet = null;
         try {
-            in = new BufferedInputStream(new FileInputStream(new File(filePath)));
+            fileInputStream = new FileInputStream(file);
+            in = new BufferedInputStream(fileInputStream);
             pkg = OPCPackage.open(in);
             XSSFReader r = new XSSFReader(pkg);
             // 通过读取workbook设置rid
@@ -56,28 +84,48 @@ public class ExcelEventUserModel {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            try {
-                if (sheet != null) sheet.close();
-            } catch (Exception closeException) {
-                closeException.printStackTrace();
-            }
-            try {
-                if (sst != null) sst.close();
-            } catch (Exception closeException) {
-                closeException.printStackTrace();
-            }
-            try {
-                if (pkg != null) pkg.close();
-            } catch (Exception closeException) {
-                closeException.printStackTrace();
-            }
-            try {
-                if (in != null) in.close();
-            } catch (Exception closeException) {
-                closeException.printStackTrace();
-            }
+            releaseResources(sheet, sst, pkg, in, fileInputStream);
         }
         return this.data;
+    }
+
+    private void releaseResources(InputStream sheet, SharedStringsTable sst, OPCPackage pkg,
+            InputStream in, FileInputStream fileInputStream) {
+        try {
+            if (sheet != null) {
+                sheet.close();
+            }
+        } catch (Exception closeException) {
+            closeException.printStackTrace();
+        }
+        try {
+            if (sst != null) {
+                sst.close();
+            }
+        } catch (Exception closeException) {
+            closeException.printStackTrace();
+        }
+        try {
+            if (pkg != null) {
+                pkg.close();
+            }
+        } catch (Exception closeException) {
+            closeException.printStackTrace();
+        }
+        try {
+            if (in != null) {
+                in.close();
+            }
+        } catch (Exception closeException) {
+            closeException.printStackTrace();
+        }
+        try {
+            if (fileInputStream != null) {
+                fileInputStream.close();
+            }
+        } catch (Exception closeException) {
+            closeException.printStackTrace();
+        }
     }
 
     private void setRelationshipId(XSSFReader r)
@@ -100,8 +148,24 @@ public class ExcelEventUserModel {
         private WorkbookHandler() {}
 
         public void startElement(String uri, String localName, String name, Attributes attributes) {
-            if ("sheet".equals(name)) {
+            // java代码创建，"Sheet1-第一次创建"为Sheet列表中的第一个Sheet
+            // <sheets>
+            // <sheet name="Sheet1-第一次创建" r:id="rId3" sheetId="1"/>
+            // <sheet name="Sheet2-第二次创建" r:id="rId4" sheetId="2"/>
+            // <sheet name="Sheet3-第三次创建" r:id="rId5" sheetId="3"/>
+            // </sheets>
+
+            // MS Office创建，"Sheet3-第三次创建"为Sheet列表中的第一个Sheet
+            // <sheets>
+            // <sheet name="Sheet3-第三次创建" sheetId="3" r:id="rId1"/>
+            // <sheet name="Sheet1-第一次创建" sheetId="1" r:id="rId2"/>
+            // <sheet name="Sheet2-第二次创建" sheetId="2" r:id="rId3"/>
+            // <sheet name="Sheet5-第五次创建，删除了第四次创建的Sheet4" sheetId="5" r:id="rId4"/>
+            // </sheets>
+
+            if (!rIdInitialized && "sheet".equals(name)) {
                 rId = attributes.getValue("r:id");
+                rIdInitialized = true;
             }
         }
 
@@ -202,7 +266,7 @@ public class ExcelEventUserModel {
 
         /**
          * 转换表格引用为行号
-         * 
+         *
          * @param cellReference 列引用，例：A1
          * @return 行号，从0开始
          */
